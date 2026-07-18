@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>売上伝票OCR自動化 × 荷主別ルールエンジン(デモ)</title>
+<meta name="description" content="OCRによる売上伝票入力自動化と、荷主別カスタム料金ルールエンジンによるスケーラブルな売上訂正フェーズ設計。すべて合成データによるデモ。" />
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+
+    --series-1: #2a78d6; /* blue: 電子伝票 / ルールエンジンあり / オプションB */
+    --series-2: #1baf7a; /* aqua: 自社手書き伝票 */
+    --series-3: #eda100; /* yellow: 荷主仕様伝票 */
+    --series-4: #008300; /* green: 代理店伝票 / オプションA */
+    --series-6: #e34948; /* red: ルールエンジンなし */
+    --series-8: #eb6834; /* orange: オプションC */
+
+    --seq-250: #86b6ef;
+    --seq-400: #3987e5;
+    --seq-450: #2a78d6;
+    --seq-550: #1c5cab;
+
+    --status-good:     #0ca30c;
+    --status-warning:  #fab219;
+    --status-serious:  #ec835a;
+    --status-critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+
+      --series-1: #3987e5;
+      --series-2: #199e70;
+      --series-3: #c98500;
+      --series-4: #008300;
+      --series-6: #e66767;
+      --series-8: #d95926;
+
+      --seq-250: #5598e7;
+      --seq-400: #3987e5;
+      --seq-450: #2a78d6;
+      --seq-550: #184f95;
+    }
+  }
+  body { background: var(--page-plane); color: var(--text-primary); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; }
+  .hairline { stroke: var(--grid); stroke-width: 1; }
+  .muted { color: var(--text-muted); }
+  .secondary { color: var(--text-secondary); }
+  .tabular { font-variant-numeric: tabular-nums; }
+  input[type="range"] { accent-color: var(--series-1); }
+  table.data-table th, table.data-table td { padding: 6px 10px; border-bottom: 1px solid var(--grid); font-size: 12.5px; }
+  table.data-table th { color: var(--text-muted); font-weight: 600; text-align: left; white-space: nowrap; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+  .chip-btn { border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; font-size: 12.5px; cursor: pointer; background: var(--surface-1); color: var(--text-secondary); }
+  .chip-btn[data-active="true"] { background: var(--series-1); color: white; border-color: var(--series-1); }
+</style>
+</head>
+<body class="min-h-screen">
+
+<header class="border-b" style="border-color:var(--border); background:var(--surface-1);">
+  <div class="max-w-6xl mx-auto px-6 py-5">
+    <p class="text-xs font-semibold tracking-wide muted mb-1">SCM / 物流DX ポートフォリオ・デモ</p>
+    <h1 class="text-2xl font-bold">売上伝票OCR自動化 × 荷主別カスタム料金ルールエンジン</h1>
+    <p class="secondary text-sm mt-2 max-w-3xl">OCRによる入力自動化は「必要条件」にすぎない。荷主ごとに異なる料金体系・付帯作業・チャーター条件を構造化する<b>ルールエンジン</b>を組み合わせて初めて、荷主数が増えてもスケールする売上訂正フェーズが実現する — という設計提案のデモです。</p>
+    <div class="mt-3 inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-md" style="background:color-mix(in srgb, var(--status-warning) 16%, transparent); color:var(--text-secondary); border:1px solid var(--border);">
+      ⚠ 本ページのすべての数値は合成(架空)データです。実在企業のコスト実績・荷主情報は一切含まれていません。詳細は
+      <a href="docs/design.md" class="underline">docs/design.md</a> を参照してください。
+    </div>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-6 py-8 space-y-10">
+
+  <!-- KPI row -->
+  <section id="kpi-row" class="grid grid-cols-2 md:grid-cols-5 gap-4"></section>
+
+  <!-- Section 1: 課題サマリー -->
+  <section class="card p-6">
+    <h2 class="text-lg font-semibold mb-1">1. 課題サマリー — 全社スケールでの伝票内訳と本質課題</h2>
+    <p class="secondary text-sm mb-5">全社では一日あたり約10,000件(架空)の伝票が全国で入力されている。電子伝票(60%)は荷主システムから既に構造化データとして連携されるためOCR対象外。残り40%(手書き・荷主仕様・代理店)がOCR自動化の対象。</p>
+    <div id="chart-slip-mix"></div>
+    <div id="legend-slip-mix" class="flex flex-wrap gap-x-6 gap-y-2 mt-4 text-xs"></div>
+    <p class="secondary text-sm mt-5 leading-relaxed">大半の拠点は複数の荷主を同時に担当しており、荷主ごとに異なる料金体系・付帯作業条件・チャーター条件を都度人手で管理しているのが全社の実態である。荷主が増えるほど、この個別ルールへの対応工数が積み上がる — これが本質課題であり、セクション4で扱う。</p>
+
+    <div class="mt-5 p-4 rounded-lg" style="border:1px dashed var(--border); background:var(--page-plane);">
+      <p class="text-xs font-semibold mb-1" style="color:var(--text-secondary);">📎 ケーススタディ: 荷主1社専任拠点という特殊事例</p>
+      <p class="text-xs secondary leading-relaxed">一部拠点(自部署に相当)は荷主が1社に固定されているため、チャーター・付帯作業ルールを外部マスターとして保持し、クエリ+RPAで基幹システムへ自動反映するというシンプルな運用が成立している。<b>しかしこれは全社では例外的なパターンであり、大半の拠点では複数荷主が並行稼働し、都度の例外対応が積み上がっている。</b> 本質課題は将来の拡張リスクではなく、この特殊事例の外側では全社ですでに起きている問題である。</p>
+    </div>
+  </section>
+
+  <!-- Section 2: OCR処理シミュレーション -->
+  <section class="card p-6">
+    <h2 class="text-lg font-semibold mb-1">2. OCR処理シミュレーション — 信頼度分布と自動承認閾値</h2>
+    <p class="secondary text-sm mb-5">伝票種別ごとにOCR抽出結果の信頼度スコア(合成値)の分布が異なる。自動承認の閾値を動かすと、自動化率と要人手確認件数がどう変化するかを確認できる。</p>
+
+    <div class="flex flex-col md:flex-row md:items-center gap-3 mb-6 p-4 rounded-lg" style="background:var(--page-plane); border:1px solid var(--border);">
+      <label for="threshold-slider" class="text-sm font-medium whitespace-nowrap">自動承認の信頼度閾値</label>
+      <input id="threshold-slider" type="range" min="50" max="99" value="90" class="flex-1" />
+      <div class="flex gap-6 text-sm tabular whitespace-nowrap">
+        <span>閾値: <b id="threshold-value">90</b>点以上</span>
+        <span>自動承認率: <b id="auto-rate-value" style="color:var(--status-good)">—</b></span>
+        <span>要人手確認: <b id="review-count-value">—</b>件</span>
+      </div>
+    </div>
+
+    <div id="chart-histograms" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+
+    <div class="mt-8">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <h3 class="text-sm font-semibold">OCR抽出結果サンプル(全国日次1万件のうち300件を抽出)</h3>
+        <div id="table-filters" class="flex gap-2 flex-wrap"></div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="data-table w-full">
+          <thead>
+            <tr>
+              <th>伝票ID</th><th>伝票種別</th><th>荷主ID</th><th>抽出重量(kg)</th><th>信頼度</th><th>ステータス</th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+      <div class="flex items-center justify-between mt-3 text-xs secondary">
+        <span id="table-summary"></span>
+        <div class="flex gap-2">
+          <button id="prev-page" class="chip-btn">← 前へ</button>
+          <span id="page-indicator" class="tabular self-center"></span>
+          <button id="next-page" class="chip-btn">次へ →</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section 3: 売上訂正ワークフロー -->
+  <section class="card p-6">
+    <h2 class="text-lg font-semibold mb-1">3. 売上訂正ワークフロー — OCR抽出から基幹システム登録まで</h2>
+    <p class="secondary text-sm mb-5">OCR抽出後、重量確定・輸送方法パラメータ判定・チャーター判定・付帯作業判定を経て基幹システムへ登録される。ステップごとの自動化率(合成値)を示す。1段目は上のスライダーの閾値と連動する。</p>
+    <div id="chart-workflow" class="overflow-x-auto"></div>
+  </section>
+
+  <!-- Section 4: ルールエンジン -->
+  <section class="card p-6">
+    <h2 class="text-lg font-semibold mb-1">4. 荷主別カスタム料金ルールエンジン(二層レート) — スケーラビリティの比較</h2>
+    <p class="secondary text-sm mb-4">料金は二層。<b>基本包括</b>(顧客と合意済みの包括運賃・件数の大半)と<b>特別適用</b>(案件ごとの個別見積・少数だが訂正工数が集中)。根本課題は、合意済みの基本包括レートが基幹に無く毎回人手で再現していること。ルールエンジンは Layer1(基本包括マスター)+ Layer2(特別適用オーバーライド)で、大半を自動確定し人手を特別適用に絞る(いずれも架空の合成モデル)。</p>
+
+    <div class="mb-6">
+      <h3 class="text-sm font-semibold mb-2">運賃適用区分の内訳(全国日次1万件のサンプル・架空)</h3>
+      <div id="chart-rate-basis"></div>
+      <div id="legend-rate-basis" class="flex flex-wrap gap-x-6 gap-y-2 mt-3 text-xs"></div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-6">
+      <div>
+        <h3 class="text-sm font-semibold mb-3">荷主別ルール一覧(架空)</h3>
+        <div class="overflow-x-auto">
+          <table class="data-table w-full">
+            <thead><tr><th>荷主ID</th><th>件数シェア(架空)</th><th>重量帯単価の目安</th><th>付帯作業単価</th><th>チャーター適用条件</th></tr></thead>
+            <tbody id="shipper-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <h3 class="text-sm font-semibold mb-3">付帯作業単価 荷主別比較(架空)</h3>
+        <div id="chart-shipper-bars"></div>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-3 mb-4 p-4 rounded-lg" style="background:var(--page-plane); border:1px solid var(--border);">
+      <label for="shipper-count-slider" class="text-sm font-medium whitespace-nowrap">登録荷主数(シミュレーション)</label>
+      <input id="shipper-count-slider" type="range" min="1" max="60" value="24" class="flex-1" />
+      <span class="text-sm tabular whitespace-nowrap">現在: <b id="shipper-count-value">5</b>社</span>
+    </div>
+    <div id="chart-cost-curve"></div>
+    <div id="legend-cost-curve" class="flex flex-wrap gap-x-6 gap-y-2 mt-3 text-xs"></div>
+  </section>
+
+  <!-- Section 5: ROI -->
+  <section class="card p-6">
+    <h2 class="text-lg font-semibold mb-1">5. ROIシミュレーション(架空モデル)</h2>
+    <p class="secondary text-sm mb-5">上のスライダーで設定した荷主数における、ルールエンジンあり/なしの月間運用工数を比較する(すべて架空の前提値から算出)。</p>
+    <div id="chart-roi" class="max-w-md"></div>
+  </section>
+
+  <!-- Section 6: 経営オプション比較 -->
+  <section class="card p-6">
+    <h2 class="text-lg font-semibold mb-1">6. 経営オプション比較 — 答えは一つではない</h2>
+    <p class="secondary text-sm mb-4">OCR自動化(A)は「症状(手入力)」に効くが、原因(料金の複雑性を保持できない基幹システム)には触れない。ここでは打ち手を1つに固定せず、レバーの異なる3案を回収期間で比較する。前提を動かすと「正解」が変わることを体感するための道具である(すべて架空モデル)。</p>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6 text-xs">
+      <div class="p-3 rounded-lg" style="border:1px solid var(--border);"><span class="font-semibold" style="color:var(--series-4)">A 入力自動化(OCR+RPA)</span><br><span class="secondary">①データ捕捉を叩く。投資小・回収速・削減浅。②③を放置しスケールに限界。</span></div>
+      <div class="p-3 rounded-lg" style="border:1px solid var(--border);"><span class="font-semibold" style="color:var(--series-1)">B 基幹改修/中間レイヤ(二層レート)</span><br><span class="secondary">③システム制約を叩く。基本包括+特別適用を基幹に持たせ訂正フェーズ自体が消える。前回のルールエンジンはB(ストラングラー型)のサブセット。当初のG(課金モデル転換)はBに吸収。</span></div>
+      <div class="p-3 rounded-lg" style="border:1px solid var(--border);"><span class="font-semibold" style="color:var(--series-8)">C 特別適用の標準化</span><br><span class="secondary">②複雑性の源流を叩く。特別適用(個別見積)を有限メニュー化。BのLayer2の対象範囲を縮小する。</span></div>
+    </div>
+
+    <div class="flex flex-col md:flex-row gap-3 mb-3">
+      <div class="flex items-center gap-3 flex-1 p-4 rounded-lg" style="background:var(--page-plane); border:1px solid var(--border);">
+        <label for="capex-b-slider" class="text-sm font-medium whitespace-nowrap">Bの改修投資額</label>
+        <input id="capex-b-slider" type="range" min="1000" max="8000" step="250" value="3000" class="flex-1" />
+        <span class="text-sm tabular whitespace-nowrap"><b id="capex-b-value">3,000</b>万円</span>
+      </div>
+      <div class="flex items-center gap-3 flex-1 p-4 rounded-lg" style="background:var(--page-plane); border:1px solid var(--border);">
+        <label for="std-c-slider" class="text-sm font-medium whitespace-nowrap">Cの標準化削減率</label>
+        <input id="std-c-slider" type="range" min="0" max="60" step="5" value="35" class="flex-1" />
+        <span class="text-sm tabular whitespace-nowrap"><b id="std-c-value">35</b>%</span>
+      </div>
+    </div>
+
+    <div class="flex flex-col md:flex-row gap-3 mb-2">
+      <div class="flex items-center gap-3 flex-1 p-4 rounded-lg" style="background:var(--page-plane); border:1px dashed var(--border);">
+        <label for="eslip-slider" class="text-sm font-medium whitespace-nowrap">D 電子化率(母数)</label>
+        <input id="eslip-slider" type="range" min="60" max="90" step="1" value="60" class="flex-1" />
+        <span class="text-sm tabular whitespace-nowrap">e-伝票 <b id="eslip-value">60</b>%</span>
+      </div>
+      <div class="flex items-center gap-3 flex-1 p-4 rounded-lg" style="background:var(--page-plane); border:1px dashed var(--border);">
+        <label for="econs-slider" class="text-sm font-medium whitespace-nowrap">E 集約による単価低減</label>
+        <input id="econs-slider" type="range" min="0" max="30" step="5" value="0" class="flex-1" />
+        <span class="text-sm tabular whitespace-nowrap"><b id="econs-value">0</b>%</span>
+      </div>
+    </div>
+    <p class="text-xs muted mb-6">土台レバー(D/E)はベースラインそのものを動かす。D=電子化で訂正の<b>母数</b>を縮小、E=集約で残存手作業の<b>単価</b>を低減。現在のベースライン <b id="baseline-value">240</b>万円/月(架空)。<span class="secondary">Cが「Bを安くする」のに対し、D/Eは「問題を小さくする」——源流で解けるほど重いBの回収余地は縮む(代替関係)。</span></p>
+
+    <div id="chart-payback" class="overflow-x-auto"></div>
+    <div id="legend-payback" class="flex flex-wrap gap-x-6 gap-y-2 mt-3 text-xs"></div>
+    <p class="text-xs muted mt-2">縦軸は累計純便益(万円・架空)。各線がゼロを上抜けた月が回収完了(payback)。Bの線はCの標準化を先に進めた場合の実効投資圧縮を反映する(順序効果)。</p>
+
+    <div id="option-stats" class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6"></div>
+
+    <div id="sequencing-callout" class="mt-5 p-4 rounded-lg text-sm" style="border:1px dashed var(--border); background:var(--page-plane);"></div>
+
+    <div class="mt-8">
+      <h3 class="text-sm font-semibold mb-1">打ち手のポジショニング(インパクト × 実行の重さ)</h3>
+      <p class="secondary text-xs mb-3">payback曲線が「いくらで何ヶ月」を答えるのに対し、この2×2は「どこから手をつけるか」の地図。右上ほど根治だが重く、左上は低コストで効く高レバレッジ、左下は即効のクイックウィン(架空の定性配置)。</p>
+      <div id="chart-2x2" class="overflow-x-auto"></div>
+    </div>
+
+    <div class="mt-8">
+      <h3 class="text-sm font-semibold mb-1">投資順序ロードマップ(E → D → B)</h3>
+      <p class="secondary text-xs mb-3">安い上流の打ち手を先に効かせ、重いBは最後に「なお投資基準を超えるか」を判断する段階投資。上流(C/D/E)が問題を小さく・Bを安くするため、Bの是非は最後に確定するのが合理的(架空の定性ロードマップ)。</p>
+      <div id="chart-roadmap" class="overflow-x-auto"></div>
+    </div>
+
+    <p class="secondary text-xs mt-4">D(発生源での捕捉)・E(例外処理の集約)は §6 の土台スライダーおよび2×2で扱い、詳細は <a href="docs/strategy_options.md" class="underline">docs/strategy_options.md</a> に記録している。当初のG(課金モデル転換)は「包括運賃は合意・適用済み、ギャップはシステム側」との整理からBに吸収した。</p>
+  </section>
+
+</main>
+
+<footer class="max-w-6xl mx-auto px-6 py-10 text-xs muted space-y-1">
+  <p>本ページは架空データによる設計デモです。詳細設計は <a href="docs/design.md" class="underline">docs/design.md</a>、経営オプション分析は <a href="docs/strategy_options.md" class="underline">docs/strategy_options.md</a>、用語対照表は <a href="docs/DATA_DICTIONARY.md" class="underline">docs/DATA_DICTIONARY.md</a>、レビュー観点は <a href="docs/reviewer_guide.md" class="underline">docs/reviewer_guide.md</a> を参照。</p>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const k in (attrs || {})) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+  function textEl(x, y, str, attrs) {
+    const t = svgEl("text", Object.assign({ x: x, y: y }, attrs || {}));
+    t.textContent = str;
+    return t;
+  }
+  function el(tag, attrs, cls) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    for (const k in (attrs || {})) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+  function fmt(n) { return Math.round(n).toLocaleString("ja-JP"); }
+  function fmt1(n) { return (Math.round(n * 10) / 10).toLocaleString("ja-JP"); }
+
+  // ---- seeded PRNG (mulberry32) ----
+  function mulberry32(seed) {
+    return function () {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rng = mulberry32(20260718);
+  function randNormal(mean, sd) {
+    const u1 = Math.max(rng(), 1e-9), u2 = rng();
+    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    return mean + z * sd;
+  }
+  function clip(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // ---- synthetic domain data (すべて架空) ----
+  const SLIP_TYPES = [
+    { key: "electronic",      label: "電子伝票発行システム", share: 0.60, ocrTarget: false, colorVar: "--series-1" },
+    { key: "handwritten",     label: "自社手書き伝票",       share: 0.20, ocrTarget: true,  colorVar: "--series-2", confMean: 72, confSd: 15 },
+    { key: "shipper_format",  label: "荷主仕様伝票",         share: 0.10, ocrTarget: true,  colorVar: "--series-3", confMean: 85, confSd: 9  },
+    { key: "agency_format",   label: "代理店伝票",           share: 0.10, ocrTarget: true,  colorVar: "--series-4", confMean: 78, confSd: 12 },
+  ];
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  // 少数の主要荷主(6社)+ロングテール(推定50社超を集約)という、実際の3PLによくある構成を模す(すべて架空)
+  const NATIONAL_DAILY_SLIP_VOLUME = 10000;
+  const SHIPPER_VOLUME_SHARES = [0.20, 0.16, 0.13, 0.11, 0.09, 0.08, 0.23]; // 荷主A〜F + ロングテール、合計1.0
+  const SHIPPERS = ["荷主A", "荷主B", "荷主C", "荷主D", "荷主E", "荷主F", "ロングテール(集約)"].map(function (id, i) {
+    const isLongTail = id === "ロングテール(集約)";
+    return {
+      id: id,
+      volumeShare: SHIPPER_VOLUME_SHARES[i],
+      incidentalRate: Math.round(800 + rng() * 1800),
+      weightTierNote: isLongTail ? "荷主により多様(架空)" : (i % 2 === 0 ? "軽量帯を細分化(架空)" : "標準3段階(架空)"),
+      charterCondition: ["集荷時のみ加算(架空)", "集荷・配達とも加算(架空)", "月間件数閾値超で優遇(架空)", "配達時のみ加算(架空)", "エリア別に個別設定(架空)", "重量帯別に加算(架空)", "荷主ごとに個別設定(架空、推定50社超)"][i],
+    };
+  });
+  function pickShipper() {
+    const total = SHIPPERS.reduce(function (a, s) { return a + s.volumeShare; }, 0);
+    const r = rng() * total;
+    let acc = 0;
+    for (const s of SHIPPERS) { acc += s.volumeShare; if (r <= acc) return s; }
+    return SHIPPERS[SHIPPERS.length - 1];
+  }
+
+  function pickSlipType() {
+    const targets = SLIP_TYPES.filter(function (t) { return t.ocrTarget; });
+    const total = targets.reduce(function (a, t) { return a + t.share; }, 0);
+    const r = rng() * total;
+    let acc = 0;
+    for (const t of targets) { acc += t.share; if (r <= acc) return t; }
+    return targets[targets.length - 1];
+  }
+
+  const OCR_RECORD_COUNT = 300; // 全国日次1万件からのサンプル抽出(表示・検証用、架空)
+  const ocrRecords = [];
+  for (let i = 0; i < OCR_RECORD_COUNT; i++) {
+    const type = pickSlipType();
+    const shipper = pickShipper();
+    const confidence = Math.round(clip(randNormal(type.confMean, type.confSd), 20, 99));
+    // 運賃適用区分: 大半は基本包括(合意済みレート)、少数が特別適用(個別見積)。ロングテールほど特別適用が多い(架空)
+    const specialProb = shipper.id === "ロングテール(集約)" ? 0.32 : 0.13;
+    const rateBasis = rng() < specialProb ? "special" : "blanket";
+    ocrRecords.push({
+      id: "SL-" + String(100000 + i),
+      typeKey: type.key,
+      typeLabel: type.label,
+      colorVar: type.colorVar,
+      shipperId: shipper.id,
+      weight: Math.round(clip(randNormal(480, 220), 15, 1800) * 10) / 10,
+      confidence: confidence,
+      rateBasis: rateBasis,
+    });
+  }
+
+  // ============ KPI row ============
+  function renderKpiRow() {
+    const target = document.getElementById("kpi-row");
+    const ocrShare = SLIP_TYPES.filter(function (t) { return t.ocrTarget; }).reduce(function (a, t) { return a + t.share; }, 0);
+    const avgConfidence = ocrRecords.reduce(function (a, r) { return a + r.confidence; }, 0) / ocrRecords.length;
+    const tiles = [
+      { label: "全国日次伝票件数(架空)", value: fmt(NATIONAL_DAILY_SLIP_VOLUME) + "件/日", sub: "全社合計、すべて架空の合成値" },
+      { label: "OCR自動化対象の伝票比率", value: Math.round(ocrShare * 100) + "%", sub: "電子伝票(60%)以外の3種類が対象" },
+      { label: "OCR平均信頼度(架空)", value: fmt1(avgConfidence) + "点", sub: "全国日次件数からの300件サンプル平均" },
+      { label: "登録荷主レンジ(全社規模)", value: "1〜60社", sub: "主要6社+ロングテール(架空)" },
+      { label: "対象伝票分類数", value: SLIP_TYPES.length + "種類", sub: "電子/手書き/荷主仕様/代理店" },
+    ];
+    tiles.forEach(function (t) {
+      const card = el("div", {}, "card p-4");
+      const l = el("p", {}, "text-xs muted mb-1"); l.textContent = t.label;
+      const v = el("p", {}, "text-2xl font-bold tabular"); v.textContent = t.value;
+      const s = el("p", {}, "text-xs secondary mt-1"); s.textContent = t.sub;
+      card.appendChild(l); card.appendChild(v); card.appendChild(s);
+      target.appendChild(card);
+    });
+  }
+
+  // ============ Section 1: slip mix 100% stacked bar ============
+  function renderSlipMix() {
+    const container = document.getElementById("chart-slip-mix");
+    container.innerHTML = "";
+    const width = Math.max(320, Math.min(container.clientWidth || 900, 900));
+    const height = 56;
+    const gap = 2;
+    const svg = svgEl("svg", { width: "100%", height: height, viewBox: "0 0 " + width + " " + height });
+    let x = 0;
+    SLIP_TYPES.forEach(function (t, i) {
+      const w = t.share * width - (i === 0 || i === SLIP_TYPES.length - 1 ? gap / 2 : gap);
+      const isFirst = i === 0, isLast = i === SLIP_TYPES.length - 1;
+      const rx = 4;
+      const rect = svgEl("rect", {
+        x: x, y: 0, width: Math.max(w, 1), height: height,
+        fill: "var(" + t.colorVar + ")",
+        rx: rx,
+      });
+      // square off inner corners by overlaying non-rounded rect on the inner side
+      container.dataset.tmp = "";
+      svg.appendChild(rect);
+      if (isFirst) {
+        const mask = svgEl("rect", { x: x + rx, y: 0, width: Math.max(w - rx, 0), height: height, fill: "var(" + t.colorVar + ")" });
+        svg.appendChild(mask);
+      } else if (isLast) {
+        const mask = svgEl("rect", { x: x, y: 0, width: Math.max(w - rx, 0), height: height, fill: "var(" + t.colorVar + ")" });
+        svg.appendChild(mask);
+      } else {
+        const mask = svgEl("rect", { x: x, y: 0, width: Math.max(w, 0), height: height, fill: "var(" + t.colorVar + ")" });
+        svg.appendChild(mask);
+      }
+      // direct label on the dominant segment only (selective labeling rule)
+      if (t.share >= 0.3) {
+        const label = textEl(x + 14, height / 2 + 5, t.label + " " + Math.round(t.share * 100) + "%", {
+          fill: "#ffffff", "font-size": "13", "font-weight": "600",
+        });
+        svg.appendChild(label);
+      }
+      x += t.share * width;
+    });
+    container.appendChild(svg);
+
+    const legend = document.getElementById("legend-slip-mix");
+    legend.innerHTML = "";
+    SLIP_TYPES.forEach(function (t) {
+      const item = el("div", {}, "flex items-center gap-2");
+      const swatch = el("span", { style: "background:var(" + t.colorVar + ");width:10px;height:10px;border-radius:2px;display:inline-block;" });
+      const label = el("span", {}, "secondary");
+      label.textContent = t.label + "(" + Math.round(t.share * 100) + "%)" + (t.ocrTarget ? " · OCR対象" : " · OCR対象外");
+      item.appendChild(swatch); item.appendChild(label);
+      legend.appendChild(item);
+    });
+  }
+
+  // ============ Section 2: confidence histograms ============
+  const BIN_EDGES = [20, 30, 40, 50, 60, 70, 80, 90, 100];
+  function buildBins(records) {
+    const bins = [];
+    for (let i = 0; i < BIN_EDGES.length - 1; i++) bins.push({ lo: BIN_EDGES[i], hi: BIN_EDGES[i + 1], count: 0 });
+    records.forEach(function (r) {
+      for (const b of bins) { if (r.confidence >= b.lo && r.confidence < b.hi + (b.hi === 100 ? 1 : 0)) { b.count++; break; } }
+    });
+    return bins;
+  }
+  function renderHistograms() {
+    const container = document.getElementById("chart-histograms");
+    container.innerHTML = "";
+    const ocrTypes = SLIP_TYPES.filter(function (t) { return t.ocrTarget; });
+    ocrTypes.forEach(function (t) {
+      const records = ocrRecords.filter(function (r) { return r.typeKey === t.key; });
+      const bins = buildBins(records);
+      const maxCount = Math.max.apply(null, bins.map(function (b) { return b.count; }).concat([1]));
+      const card = el("div", {}, "p-3 rounded-lg");
+      card.style.border = "1px solid var(--border)";
+      const title = el("p", {}, "text-xs font-semibold mb-2"); title.textContent = t.label + "(n=" + records.length + ")";
+      card.appendChild(title);
+
+      const w = 260, h = 130, padL = 4, padB = 16, barGap = 2;
+      const plotW = w - padL * 2, plotH = h - padB;
+      const barW = plotW / bins.length;
+      const svg = svgEl("svg", { width: "100%", height: h, viewBox: "0 0 " + w + " " + h });
+      // gridline
+      [0.25, 0.5, 0.75, 1].forEach(function (f) {
+        const y = plotH - plotH * f;
+        svg.appendChild(svgEl("line", { x1: padL, x2: w - padL, y1: y, y2: y, class: "hairline" }));
+      });
+      bins.forEach(function (b, i) {
+        const bh = (b.count / maxCount) * plotH;
+        const x = padL + i * barW + barGap / 2;
+        const bw = Math.max(barW - barGap, 1);
+        svg.appendChild(svgEl("rect", {
+          x: x, y: plotH - bh, width: bw, height: Math.max(bh, 0), rx: 3,
+          fill: "var(" + t.colorVar + ")",
+        }));
+        const tt = svgEl("title"); tt.textContent = b.lo + "〜" + b.hi + "点: " + b.count + "件";
+        svg.lastChild.appendChild(tt);
+        if (i % 2 === 0) {
+          svg.appendChild(textEl(x + bw / 2, h - 4, String(b.lo), { fill: "var(--text-muted)", "font-size": "8", "text-anchor": "middle" }));
+        }
+      });
+      card.appendChild(svg);
+      container.appendChild(card);
+    });
+  }
+
+  // ============ threshold-driven metrics ============
+  function currentThreshold() { return parseInt(document.getElementById("threshold-slider").value, 10); }
+  function updateThresholdMetrics() {
+    const th = currentThreshold();
+    document.getElementById("threshold-value").textContent = th;
+    const targetRecords = ocrRecords.filter(function (r) { return SLIP_TYPES.find(function (t) { return t.key === r.typeKey; }).ocrTarget; });
+    const approved = targetRecords.filter(function (r) { return r.confidence >= th; });
+    const rate = targetRecords.length ? (approved.length / targetRecords.length) * 100 : 0;
+    document.getElementById("auto-rate-value").textContent = fmt1(rate) + "%";
+    document.getElementById("review-count-value").textContent = fmt(targetRecords.length - approved.length);
+    renderWorkflow();
+    renderTable();
+  }
+
+  // ============ Section 3: workflow ============
+  const WORKFLOW_STEPS = [
+    { key: "ocr", label: "OCR抽出" },
+    { key: "weight", label: "重量確定" },
+    { key: "transport", label: "輸送方法判定", rate: 88 },
+    { key: "charter", label: "チャーター判定", rate: 82 },
+    { key: "incidental", label: "付帯作業判定", rate: 76 },
+    { key: "register", label: "基幹システム登録", rate: 95 },
+  ];
+  function statusColor(rate) {
+    if (rate >= 85) return { color: "var(--status-good)", label: "高自動化" };
+    if (rate >= 65) return { color: "var(--status-warning)", label: "一部人手介入" };
+    return { color: "var(--status-serious)", label: "人手依存" };
+  }
+  function renderWorkflow() {
+    const container = document.getElementById("chart-workflow");
+    container.innerHTML = "";
+    const th = currentThreshold();
+    const targetRecords = ocrRecords.filter(function (r) { return SLIP_TYPES.find(function (t) { return t.key === r.typeKey; }).ocrTarget; });
+    const ocrRate = targetRecords.length ? (targetRecords.filter(function (r) { return r.confidence >= th; }).length / targetRecords.length) * 100 : 0;
+    const weightRate = Math.max(ocrRate - 8, 10); // 現地計測が必要なケースがある分、OCR自動化率よりやや低い(架空の補正)
+
+    const steps = WORKFLOW_STEPS.map(function (s) {
+      if (s.key === "ocr") return Object.assign({}, s, { rate: ocrRate });
+      if (s.key === "weight") return Object.assign({}, s, { rate: weightRate });
+      return s;
+    });
+
+    const nodeW = 148, nodeH = 64, gap = 28, h = 110;
+    const w = steps.length * nodeW + (steps.length - 1) * gap + 20;
+    const svg = svgEl("svg", { width: Math.max(w, 300), height: h, viewBox: "0 0 " + w + " " + h });
+    steps.forEach(function (s, i) {
+      const x = 10 + i * (nodeW + gap);
+      const y = 16;
+      const sc = statusColor(s.rate);
+      if (i > 0) {
+        const prevX = 10 + (i - 1) * (nodeW + gap) + nodeW;
+        const midY = y + nodeH / 2;
+        svg.appendChild(svgEl("line", { x1: prevX, x2: x, y1: midY, y2: midY, stroke: "var(--baseline)", "stroke-width": 2 }));
+        svg.appendChild(svgEl("polygon", { points: (x - 6) + "," + (midY - 5) + " " + x + "," + midY + " " + (x - 6) + "," + (midY + 5), fill: "var(--baseline)" }));
+      }
+      svg.appendChild(svgEl("rect", { x: x, y: y, width: nodeW, height: nodeH, rx: 10, fill: "var(--surface-1)", stroke: sc.color, "stroke-width": 2 }));
+      svg.appendChild(svgEl("circle", { cx: x + 14, cy: y + 14, r: 5, fill: sc.color }));
+      svg.appendChild(textEl(x + nodeW / 2, y + 26, s.label, { fill: "var(--text-primary)", "font-size": "12", "font-weight": "600", "text-anchor": "middle" }));
+      svg.appendChild(textEl(x + nodeW / 2, y + 46, fmt1(s.rate) + "% 自動化 · " + sc.label, { fill: "var(--text-secondary)", "font-size": "10.5", "text-anchor": "middle" }));
+    });
+    container.appendChild(svg);
+  }
+
+  // ============ Section 2 continued: table with filter & pagination ============
+  const PAGE_SIZE = 10;
+  const state = { page: 0, typeFilter: "all" };
+  function filteredRecords() {
+    const th = currentThreshold();
+    return ocrRecords
+      .filter(function (r) { return SLIP_TYPES.find(function (t) { return t.key === r.typeKey; }).ocrTarget; })
+      .filter(function (r) { return state.typeFilter === "all" || r.typeKey === state.typeFilter; })
+      .map(function (r) { return Object.assign({}, r, { status: r.confidence >= th ? "auto_approved" : "needs_review" }); });
+  }
+  function renderTableFilters() {
+    const wrap = document.getElementById("table-filters");
+    wrap.innerHTML = "";
+    const options = [{ key: "all", label: "すべて" }].concat(
+      SLIP_TYPES.filter(function (t) { return t.ocrTarget; }).map(function (t) { return { key: t.key, label: t.label }; })
+    );
+    options.forEach(function (o) {
+      const btn = el("button", { "data-active": state.typeFilter === o.key ? "true" : "false" }, "chip-btn");
+      btn.textContent = o.label;
+      btn.addEventListener("click", function () { state.typeFilter = o.key; state.page = 0; renderTableFilters(); renderTable(); });
+      wrap.appendChild(btn);
+    });
+  }
+  function renderTable() {
+    const tbody = document.getElementById("table-body");
+    tbody.innerHTML = "";
+    const records = filteredRecords();
+    const totalPages = Math.max(1, Math.ceil(records.length / PAGE_SIZE));
+    state.page = Math.min(state.page, totalPages - 1);
+    const pageRecords = records.slice(state.page * PAGE_SIZE, state.page * PAGE_SIZE + PAGE_SIZE);
+    pageRecords.forEach(function (r) {
+      const tr = document.createElement("tr");
+      [r.id, r.typeLabel, r.shipperId, fmt1(r.weight), r.confidence + "点"].forEach(function (val) {
+        const td = document.createElement("td");
+        td.className = "tabular secondary";
+        td.textContent = val;
+        tr.appendChild(td);
+      });
+      const statusTd = document.createElement("td");
+      const badge = document.createElement("span");
+      if (r.status === "auto_approved") {
+        badge.className = "badge";
+        badge.style.background = "color-mix(in srgb, var(--status-good) 18%, transparent)";
+        badge.style.color = "var(--status-good)";
+        badge.textContent = "✓ 自動承認";
+      } else {
+        badge.className = "badge";
+        badge.style.background = "color-mix(in srgb, var(--status-warning) 22%, transparent)";
+        badge.style.color = "var(--text-primary)";
+        badge.textContent = "△ 要人手確認";
+      }
+      statusTd.appendChild(badge);
+      tr.appendChild(statusTd);
+      tbody.appendChild(tr);
+    });
+    document.getElementById("table-summary").textContent = records.length + "件中 " + (records.length === 0 ? 0 : state.page * PAGE_SIZE + 1) + "–" + Math.min(records.length, (state.page + 1) * PAGE_SIZE) + "件を表示";
+    document.getElementById("page-indicator").textContent = (state.page + 1) + " / " + totalPages;
+  }
+  function bindTablePagination() {
+    document.getElementById("prev-page").addEventListener("click", function () { if (state.page > 0) { state.page--; renderTable(); } });
+    document.getElementById("next-page").addEventListener("click", function () {
+      const totalPages = Math.max(1, Math.ceil(filteredRecords().length / PAGE_SIZE));
+      if (state.page < totalPages - 1) { state.page++; renderTable(); }
+    });
+  }
+
+  // ============ Section 4: shipper rule table + bar chart ============
+  function renderShipperTable() {
+    const tbody = document.getElementById("shipper-table-body");
+    tbody.innerHTML = "";
+    SHIPPERS.forEach(function (s) {
+      const tr = document.createElement("tr");
+      [s.id, Math.round(s.volumeShare * 100) + "%", s.weightTierNote, fmt(s.incidentalRate) + "円/件(架空)", s.charterCondition].forEach(function (v) {
+        const td = document.createElement("td"); td.className = "secondary"; td.textContent = v; tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+  }
+  function renderShipperBars() {
+    const container = document.getElementById("chart-shipper-bars");
+    container.innerHTML = "";
+    const sorted = SHIPPERS.slice().sort(function (a, b) { return b.incidentalRate - a.incidentalRate; });
+    const maxVal = Math.max.apply(null, sorted.map(function (s) { return s.incidentalRate; }));
+    const w = 320, rowH = 30, h = sorted.length * rowH + 10;
+    const svg = svgEl("svg", { width: "100%", height: h, viewBox: "0 0 " + w + " " + h });
+    sorted.forEach(function (s, i) {
+      const y = i * rowH + 6;
+      const barMaxW = 190;
+      const bw = Math.max((s.incidentalRate / maxVal) * barMaxW, 2);
+      svg.appendChild(textEl(0, y + 14, s.id, { fill: "var(--text-secondary)", "font-size": "11.5" }));
+      svg.appendChild(svgEl("rect", { x: 46, y: y + 3, width: bw, height: 16, rx: 4, fill: "var(--seq-400)" }));
+      svg.appendChild(textEl(46 + bw + 8, y + 15, fmt(s.incidentalRate) + "円", { fill: "var(--text-secondary)", "font-size": "11" }));
+    });
+    container.appendChild(svg);
+  }
+
+  // ============ Section 4: 運賃適用区分(基本包括 vs 特別適用)100%積み上げ ============
+  function renderRateBasis() {
+    const container = document.getElementById("chart-rate-basis");
+    container.innerHTML = "";
+    const total = ocrRecords.length;
+    const special = ocrRecords.filter(function (r) { return r.rateBasis === "special"; }).length;
+    const blanket = total - special;
+    const segs = [
+      { key: "blanket", label: "基本包括(合意済みレート)", count: blanket, colorVar: "--seq-450", note: "現状は基幹に無く人手で再現している部分" },
+      { key: "special", label: "特別適用(個別見積)", count: special, colorVar: "--series-8", note: "少数だが訂正工数が集中" },
+    ];
+    const width = Math.max(320, Math.min(container.clientWidth || 880, 880)), height = 46, gap = 2;
+    const svg = svgEl("svg", { width: "100%", height: height, viewBox: "0 0 " + width + " " + height });
+    let x = 0;
+    segs.forEach(function (s, i) {
+      const w = (s.count / total) * width - (i < segs.length - 1 ? gap : 0);
+      svg.appendChild(svgEl("rect", { x: x, y: 0, width: Math.max(w, 1), height: height, rx: 4, fill: "var(" + s.colorVar + ")" }));
+      const pct = Math.round((s.count / total) * 100);
+      if (pct >= 12) svg.appendChild(textEl(x + 12, height / 2 + 5, s.label + " " + pct + "%", { fill: "#ffffff", "font-size": "12.5", "font-weight": "600" }));
+      x += (s.count / total) * width;
+    });
+    container.appendChild(svg);
+    const legend = document.getElementById("legend-rate-basis");
+    legend.innerHTML = "";
+    segs.forEach(function (s) {
+      const item = el("div", {}, "flex items-center gap-2");
+      item.appendChild(el("span", { style: "background:var(" + s.colorVar + ");width:10px;height:10px;border-radius:2px;display:inline-block;" }));
+      const label = el("span", {}, "secondary");
+      label.textContent = s.label + "(" + Math.round((s.count / total) * 100) + "%) — " + s.note;
+      item.appendChild(label);
+      legend.appendChild(item);
+    });
+  }
+
+  // ============ Section 6: 2×2 ポジショニング(インパクト × 実行の重さ、架空の定性配置) ============
+  const MATRIX_OPTIONS = [
+    { key: "A", label: "入力自動化", effort: 0.20, impact: 0.34, colorVar: "--series-4" },
+    { key: "C", label: "特別適用の標準化", effort: 0.34, impact: 0.78, colorVar: "--series-8" },
+    { key: "B", label: "基幹改修(二層レート)", effort: 0.85, impact: 0.90, colorVar: "--series-1" },
+    { key: "D", label: "発生源で捕捉", effort: 0.56, impact: 0.52, colorVar: "--series-2" },
+    { key: "E", label: "例外処理の集約", effort: 0.40, impact: 0.46, colorVar: "--series-3" },
+  ];
+  function render2x2() {
+    const container = document.getElementById("chart-2x2");
+    container.innerHTML = "";
+    const w = 520, h = 380, padL = 30, padR = 20, padT = 16, padB = 40;
+    const plotW = w - padL - padR, plotH = h - padT - padB;
+    const svg = svgEl("svg", { width: Math.max(w, 320), height: h, viewBox: "0 0 " + w + " " + h });
+    function xAt(e) { return padL + e * plotW; }
+    function yAt(im) { return padT + plotH - im * plotH; }
+    // quadrant background + dividers
+    svg.appendChild(svgEl("rect", { x: padL, y: padT, width: plotW, height: plotH, fill: "none", stroke: "var(--grid)", "stroke-width": 1 }));
+    svg.appendChild(svgEl("line", { x1: xAt(0.5), x2: xAt(0.5), y1: padT, y2: padT + plotH, class: "hairline" }));
+    svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: yAt(0.5), y2: yAt(0.5), class: "hairline" }));
+    // quadrant labels
+    const qlab = [
+      { x: 0.25, y: 0.93, t: "高レバレッジ" },
+      { x: 0.75, y: 0.93, t: "本命 / big bet" },
+      { x: 0.25, y: 0.07, t: "クイックウィン" },
+      { x: 0.75, y: 0.07, t: "割に合わない" },
+    ];
+    qlab.forEach(function (q) { svg.appendChild(textEl(xAt(q.x), yAt(q.y), q.t, { fill: "var(--text-muted)", "font-size": "10", "text-anchor": "middle", "font-style": "italic" })); });
+    // axis labels
+    svg.appendChild(textEl(padL + plotW / 2, h - 8, "実行の重さ(Effort) 軽い → 重い", { fill: "var(--text-secondary)", "font-size": "11", "text-anchor": "middle" }));
+    svg.appendChild(textEl(padL - 6, padT + 6, "高", { fill: "var(--text-muted)", "font-size": "10", "text-anchor": "end" }));
+    svg.appendChild(textEl(padL - 6, padT + plotH, "低", { fill: "var(--text-muted)", "font-size": "10", "text-anchor": "end" }));
+    const yTitle = svgEl("text", { x: 12, y: padT + plotH / 2, fill: "var(--text-secondary)", "font-size": "11", "text-anchor": "middle", transform: "rotate(-90 12 " + (padT + plotH / 2) + ")" });
+    yTitle.textContent = "インパクト(症状 → 根治)";
+    svg.appendChild(yTitle);
+    // points
+    MATRIX_OPTIONS.forEach(function (o) {
+      const cx = xAt(o.effort), cy = yAt(o.impact);
+      svg.appendChild(svgEl("circle", { cx: cx, cy: cy, r: 11, fill: "var(" + o.colorVar + ")", stroke: "var(--surface-1)", "stroke-width": 2 }));
+      svg.appendChild(textEl(cx, cy + 4, o.key, { fill: "#ffffff", "font-size": "12", "font-weight": "700", "text-anchor": "middle" }));
+      const anchor = o.effort > 0.7 ? "end" : "start";
+      const dx = o.effort > 0.7 ? -16 : 16;
+      svg.appendChild(textEl(cx + dx, cy + 4, o.label, { fill: "var(--text-secondary)", "font-size": "11", "text-anchor": anchor }));
+    });
+    container.appendChild(svg);
+  }
+
+  // ============ Section 6: 投資順序ロードマップ(E → D → B、架空の定性配置) ============
+  const ROADMAP_PHASES = [
+    { title: "Phase 1 — すぐ着手(0〜6ヶ月)", chips: [{ k: "E", c: "--series-3" }, { k: "C", c: "--series-8" }], note: "低コストの上流。E=例外処理を集約し単価を下げる、C=特別適用を標準化しBを安くする。A(OCR)も即効の下支えとして並行。" },
+    { title: "Phase 2 — 中期(6〜18ヶ月)", chips: [{ k: "D", c: "--series-2" }], note: "D=発生源での捕捉(e-伝票拡大)。訂正の母数そのものを縮小し、下流の必要投資を減らす。" },
+    { title: "Phase 3 — 判断(18ヶ月〜)", chips: [{ k: "B", c: "--series-1" }], note: "B=基幹改修(二層レート)。上流を効かせた上で、NPVがなお投資基準を超えるかを最後に判断(代替関係があるため)。" },
+  ];
+  function renderRoadmap() {
+    const container = document.getElementById("chart-roadmap");
+    container.innerHTML = "";
+    const n = ROADMAP_PHASES.length;
+    const w = 720, gap = 22, padX = 6, padT = 8;
+    const cardW = (w - padX * 2 - gap * (n - 1)) / n, cardH = 128;
+    const h = cardH + padT + 8;
+    const svg = svgEl("svg", { width: Math.max(w, 320), height: h, viewBox: "0 0 " + w + " " + h });
+    ROADMAP_PHASES.forEach(function (p, i) {
+      const x = padX + i * (cardW + gap), y = padT;
+      svg.appendChild(svgEl("rect", { x: x, y: y, width: cardW, height: cardH, rx: 10, fill: "var(--surface-1)", stroke: "var(--border)", "stroke-width": 1 }));
+      // phase title
+      svg.appendChild(textEl(x + 12, y + 22, p.title, { fill: "var(--text-primary)", "font-size": "11.5", "font-weight": "700" }));
+      // option chips
+      let cx = x + 12;
+      p.chips.forEach(function (chip) {
+        svg.appendChild(svgEl("circle", { cx: cx + 9, cy: y + 44, r: 9, fill: "var(" + chip.c + ")", stroke: "var(--surface-1)", "stroke-width": 2 }));
+        svg.appendChild(textEl(cx + 9, y + 48, chip.k, { fill: "#ffffff", "font-size": "11", "font-weight": "700", "text-anchor": "middle" }));
+        cx += 26;
+      });
+      // note (wrapped)
+      const words = p.note;
+      const maxChars = Math.floor((cardW - 24) / 6.2);
+      const lines = [];
+      for (let s = 0; s < words.length; s += maxChars) lines.push(words.slice(s, s + maxChars));
+      lines.slice(0, 5).forEach(function (ln, li) {
+        svg.appendChild(textEl(x + 12, y + 70 + li * 13, ln, { fill: "var(--text-secondary)", "font-size": "9.5" }));
+      });
+      // arrow to next
+      if (i < n - 1) {
+        const ax = x + cardW + 4, ay = y + cardH / 2;
+        svg.appendChild(svgEl("line", { x1: ax, x2: ax + gap - 8, y1: ay, y2: ay, stroke: "var(--baseline)", "stroke-width": 2 }));
+        svg.appendChild(svgEl("polygon", { points: (ax + gap - 8) + "," + (ay - 5) + " " + (ax + gap - 2) + "," + ay + " " + (ax + gap - 8) + "," + (ay + 5), fill: "var(--baseline)" }));
+      }
+    });
+    container.appendChild(svg);
+  }
+
+  // ============ Section 4 continued: cost curve ============
+  // 荷主間の例外対応が組み合わせ的に積み上がることを表現した多項式(架空)。n=1 が2.3節の特殊事例(自部署相当)に対応
+  function hoursWithoutEngine(n) { return 4 * n + 0.15 * n * (n - 1); }
+  function hoursWithEngine(n) { return 8 + n; }
+  function currentShipperCount() { return parseInt(document.getElementById("shipper-count-slider").value, 10); }
+  function renderCostCurve() {
+    const container = document.getElementById("chart-cost-curve");
+    container.innerHTML = "";
+    const n = currentShipperCount();
+    document.getElementById("shipper-count-value").textContent = n;
+    const xs = [];
+    for (let i = 1; i <= 60; i++) xs.push(i);
+    const seriesA = xs.map(hoursWithoutEngine);
+    const seriesB = xs.map(hoursWithEngine);
+    const maxY = Math.max.apply(null, seriesA.concat(seriesB));
+
+    const w = 640, h = 220, padL = 40, padB = 24, padT = 10;
+    const plotW = w - padL - 16, plotH = h - padB - padT;
+    const svg = svgEl("svg", { width: "100%", height: h, viewBox: "0 0 " + w + " " + h });
+    [0, 0.25, 0.5, 0.75, 1].forEach(function (f) {
+      const y = padT + plotH - plotH * f;
+      svg.appendChild(svgEl("line", { x1: padL, x2: w - 16, y1: y, y2: y, class: "hairline" }));
+      svg.appendChild(textEl(padL - 6, y + 3, fmt(maxY * f), { fill: "var(--text-muted)", "font-size": "9", "text-anchor": "end" }));
+    });
+    function pathFor(series) {
+      return series.map(function (v, i) {
+        const x = padL + (i / (xs.length - 1)) * plotW;
+        const y = padT + plotH - (v / maxY) * plotH;
+        return (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+      }).join(" ");
+    }
+    function xAt(i) { return padL + (i / (xs.length - 1)) * plotW; }
+    function yAt(v) { return padT + plotH - (v / maxY) * plotH; }
+
+    svg.appendChild(svgEl("path", { d: pathFor(seriesA), fill: "none", stroke: "var(--series-6)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    svg.appendChild(svgEl("path", { d: pathFor(seriesB), fill: "none", stroke: "var(--series-1)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+
+    xs.forEach(function (v, i) {
+      if (v === 1 || v % 10 === 0) svg.appendChild(textEl(xAt(i), h - 6, String(v), { fill: "var(--text-muted)", "font-size": "9", "text-anchor": "middle" }));
+    });
+
+    // current shipper-count reference line + readout
+    const idx = n - 1;
+    const rx = xAt(idx);
+    svg.appendChild(svgEl("line", { x1: rx, x2: rx, y1: padT, y2: padT + plotH, stroke: "var(--baseline)", "stroke-width": 1, "stroke-dasharray": "3,3" }));
+    [{ v: seriesA[idx], color: "var(--series-6)" }, { v: seriesB[idx], color: "var(--series-1)" }].forEach(function (p) {
+      svg.appendChild(svgEl("circle", { cx: rx, cy: yAt(p.v), r: 5, fill: p.color, stroke: "var(--surface-1)", "stroke-width": 2 }));
+    });
+    const gapHours = seriesA[idx] - seriesB[idx];
+    svg.appendChild(textEl(Math.min(rx + 8, w - 140), padT + 10, "差分 約" + fmt(gapHours) + "人時/月(架空)", { fill: "var(--text-primary)", "font-size": "11", "font-weight": "600" }));
+
+    container.appendChild(svg);
+
+    const legend = document.getElementById("legend-cost-curve");
+    legend.innerHTML = "";
+    [{ label: "ルールエンジンなし(荷主ごと個別対応・架空)", color: "var(--series-6)" }, { label: "ルールエンジンあり(マスター登録・架空)", color: "var(--series-1)" }].forEach(function (s) {
+      const item = el("div", {}, "flex items-center gap-2");
+      const line = el("span", { style: "background:" + s.color + ";width:14px;height:2px;display:inline-block;" });
+      const label = el("span", {}, "secondary"); label.textContent = s.label;
+      item.appendChild(line); item.appendChild(label);
+      legend.appendChild(item);
+    });
+
+    renderRoi(n);
+  }
+
+  // ============ Section 5: ROI two-bar comparison ============
+  function renderRoi(n) {
+    const container = document.getElementById("chart-roi");
+    container.innerHTML = "";
+    const before = hoursWithoutEngine(n);
+    const after = hoursWithEngine(n);
+    const reduction = before > 0 ? ((before - after) / before) * 100 : 0;
+    const maxV = Math.max(before, after);
+    const w = 380, h = 130, barH = 28;
+    const svg = svgEl("svg", { width: "100%", height: h, viewBox: "0 0 " + w + " " + h });
+    const rows = [
+      { label: "ルールエンジンなし(架空)", v: before, color: "var(--seq-250)" },
+      { label: "ルールエンジンあり(架空)", v: after, color: "var(--seq-550)" },
+    ];
+    rows.forEach(function (r, i) {
+      const y = i * 52 + 8;
+      svg.appendChild(textEl(0, y - 4, r.label, { fill: "var(--text-secondary)", "font-size": "11.5" }));
+      const bw = Math.max((r.v / maxV) * (w - 90), 2);
+      svg.appendChild(svgEl("rect", { x: 0, y: y, width: bw, height: barH, rx: 4, fill: r.color }));
+      svg.appendChild(textEl(bw + 8, y + barH / 2 + 4, fmt(r.v) + "人時/月", { fill: "var(--text-primary)", "font-size": "12", "font-weight": "600" }));
+    });
+    container.appendChild(svg);
+
+    const badge = el("div", {}, "mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-semibold");
+    badge.style.background = "color-mix(in srgb, var(--status-good) 16%, transparent)";
+    badge.style.color = "var(--status-good)";
+    badge.textContent = "✓ 荷主" + n + "社時点で工数 約" + fmt1(reduction) + "% 削減(架空モデル)";
+    container.appendChild(badge);
+  }
+
+  // ============ Section 6: 経営オプション比較 (payback / NPV, すべて架空) ============
+  // 全国日次1万件×OCR対象40%×手作業比率×みなし単価から組み立てた月間訂正コストのベースライン(架空、実績とは無関係)
+  const BASELINE_MONTHLY_COST = 240; // 万円/月(現状: 電子化率60%・集約なし)
+  const ESLIP_BASE = 60;             // 現状の電子伝票比率(%)
+  const OCR_TARGET_BASE = 100 - ESLIP_BASE; // 現状のOCR対象比率(%) = 40
+  const NPV_HORIZON = 36;            // 評価期間(月)
+  const MONTHLY_DISCOUNT = 0.005;    // 割引率 0.5%/月 ≒ 6%/年
+  const OPTION_DEFS = {
+    A: { key: "A", label: "A 入力自動化(OCR+RPA)", capex: 320,  opex: 12, reduction: 0.45, ramp: 2, colorVar: "--series-4" },
+    B: { key: "B", label: "B 基幹改修/中間レイヤ",   capex: 3000, opex: 20, reduction: 0.80, ramp: 9, colorVar: "--series-1" },
+    C: { key: "C", label: "C 特別適用の標準化", capex: 180,  opex: 0,  reduction: 0.35, ramp: 6, colorVar: "--series-8" },
+  };
+  function currentCapexB() { return parseInt(document.getElementById("capex-b-slider").value, 10); }
+  function currentStdC() { return parseInt(document.getElementById("std-c-slider").value, 10) / 100; }
+  function currentEslip() { return parseInt(document.getElementById("eslip-slider").value, 10); }
+  function currentEcons() { return parseInt(document.getElementById("econs-slider").value, 10) / 100; }
+
+  // 土台レバー: D(電子化)で母数、E(集約)で単価を下げ、ベースラインそのものを縮小する(架空)
+  function effectiveBaseline() {
+    const volumeFactor = (100 - currentEslip()) / OCR_TARGET_BASE; // D: OCR対象40%→縮小
+    const unitFactor = 1 - currentEcons();                          // E: 残存単価の低減
+    return BASELINE_MONTHLY_COST * volumeFactor * unitFactor;
+  }
+
+  // Cの標準化削減率を反映した各オプションの実効パラメータ(順序効果)
+  function effectiveOptions() {
+    const stdC = currentStdC();
+    const a = Object.assign({}, OPTION_DEFS.A);
+    const b = Object.assign({}, OPTION_DEFS.B);
+    const c = Object.assign({}, OPTION_DEFS.C);
+    b.capex = currentCapexB();
+    // 標準化を先に進めるほどBの実効投資が圧縮される(圧縮率0.4は架空の前提)
+    b.effectiveCapex = Math.round(b.capex * (1 - 0.4 * stdC));
+    a.effectiveCapex = a.capex;
+    c.reduction = stdC;
+    c.effectiveCapex = c.capex;
+    return [a, b, c];
+  }
+  function monthlySaving(opt, m, baseline) {
+    return baseline * opt.reduction * Math.min(m / opt.ramp, 1);
+  }
+  function cumulativeNet(opt, t, baseline) {
+    let acc = -opt.effectiveCapex;
+    for (let m = 1; m <= t; m++) acc += monthlySaving(opt, m, baseline) - opt.opex;
+    return acc;
+  }
+  function paybackMonth(opt, baseline) {
+    for (let m = 1; m <= 120; m++) { if (cumulativeNet(opt, m, baseline) >= 0) return m; }
+    return null;
+  }
+  function npv(opt, baseline) {
+    let acc = -opt.effectiveCapex;
+    for (let m = 1; m <= NPV_HORIZON; m++) acc += (monthlySaving(opt, m, baseline) - opt.opex) / Math.pow(1 + MONTHLY_DISCOUNT, m);
+    return acc;
+  }
+
+  function renderPayback() {
+    document.getElementById("capex-b-value").textContent = fmt(currentCapexB());
+    document.getElementById("std-c-value").textContent = Math.round(currentStdC() * 100);
+    document.getElementById("eslip-value").textContent = currentEslip();
+    document.getElementById("econs-value").textContent = Math.round(currentEcons() * 100);
+    const baseline = effectiveBaseline();
+    document.getElementById("baseline-value").textContent = fmt(baseline);
+    const opts = effectiveOptions();
+    const container = document.getElementById("chart-payback");
+    container.innerHTML = "";
+
+    const months = [];
+    for (let m = 0; m <= NPV_HORIZON; m++) months.push(m);
+    const seriesByOpt = opts.map(function (o) { return { opt: o, vals: months.map(function (m) { return cumulativeNet(o, m, baseline); }) }; });
+    let yMax = -Infinity, yMin = Infinity;
+    seriesByOpt.forEach(function (s) { s.vals.forEach(function (v) { if (v > yMax) yMax = v; if (v < yMin) yMin = v; }); });
+    yMax = Math.max(yMax, 10); yMin = Math.min(yMin, 0);
+
+    const w = 680, h = 260, padL = 52, padR = 16, padT = 12, padB = 26;
+    const plotW = w - padL - padR, plotH = h - padT - padB;
+    const svg = svgEl("svg", { width: Math.max(w, 320), height: h, viewBox: "0 0 " + w + " " + h });
+    function xAt(m) { return padL + (m / NPV_HORIZON) * plotW; }
+    function yAt(v) { return padT + plotH - ((v - yMin) / (yMax - yMin)) * plotH; }
+
+    // gridlines + y labels
+    const ticks = 4;
+    for (let i = 0; i <= ticks; i++) {
+      const v = yMin + (yMax - yMin) * (i / ticks);
+      const y = yAt(v);
+      svg.appendChild(svgEl("line", { x1: padL, x2: w - padR, y1: y, y2: y, class: "hairline" }));
+      svg.appendChild(textEl(padL - 6, y + 3, fmt(v), { fill: "var(--text-muted)", "font-size": "9", "text-anchor": "end" }));
+    }
+    // zero baseline emphasised
+    const y0 = yAt(0);
+    svg.appendChild(svgEl("line", { x1: padL, x2: w - padR, y1: y0, y2: y0, stroke: "var(--baseline)", "stroke-width": 1.5 }));
+    svg.appendChild(textEl(w - padR, y0 - 4, "回収ライン", { fill: "var(--text-muted)", "font-size": "9", "text-anchor": "end" }));
+    // x labels
+    [0, 6, 12, 18, 24, 30, 36].forEach(function (m) {
+      svg.appendChild(textEl(xAt(m), h - 8, m + "ヶ月", { fill: "var(--text-muted)", "font-size": "9", "text-anchor": "middle" }));
+    });
+
+    seriesByOpt.forEach(function (s) {
+      const d = s.vals.map(function (v, i) { return (i === 0 ? "M" : "L") + xAt(months[i]).toFixed(1) + "," + yAt(v).toFixed(1); }).join(" ");
+      svg.appendChild(svgEl("path", { d: d, fill: "none", stroke: "var(" + s.opt.colorVar + ")", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+      // payback marker(A/Cは近接しがちなのでラベルを左右に振り分けて衝突回避)
+      const pb = paybackMonth(s.opt, baseline);
+      if (pb !== null && pb <= NPV_HORIZON) {
+        svg.appendChild(svgEl("circle", { cx: xAt(pb), cy: yAt(0), r: 5, fill: "var(" + s.opt.colorVar + ")", stroke: "var(--surface-1)", "stroke-width": 2 }));
+        const lblCfg = { A: { dx: -8, anchor: "end" }, C: { dx: 8, anchor: "start" }, B: { dx: 0, anchor: "middle" } }[s.opt.key];
+        svg.appendChild(textEl(xAt(pb) + lblCfg.dx, yAt(0) - 10, s.opt.key + " " + pb + "ヶ月", { fill: "var(--text-primary)", "font-size": "10", "font-weight": "600", "text-anchor": lblCfg.anchor }));
+      }
+      // end label
+      const lastV = s.vals[s.vals.length - 1];
+      svg.appendChild(textEl(w - padR - 2, yAt(lastV) + 3, s.opt.key, { fill: "var(--text-secondary)", "font-size": "11", "font-weight": "700", "text-anchor": "end" }));
+    });
+    container.appendChild(svg);
+
+    // legend
+    const legend = document.getElementById("legend-payback");
+    legend.innerHTML = "";
+    opts.forEach(function (o) {
+      const item = el("div", {}, "flex items-center gap-2");
+      const line = el("span", { style: "background:var(" + o.colorVar + ");width:14px;height:2px;display:inline-block;" });
+      const label = el("span", {}, "secondary"); label.textContent = o.label + "(架空)";
+      item.appendChild(line); item.appendChild(label);
+      legend.appendChild(item);
+    });
+
+    // stat tiles
+    const statWrap = document.getElementById("option-stats");
+    statWrap.innerHTML = "";
+    opts.forEach(function (o) {
+      const pb = paybackMonth(o, baseline);
+      const n = npv(o, baseline);
+      const card = el("div", {}, "p-4 rounded-lg");
+      card.style.border = "1px solid var(--border)";
+      const head = el("div", {}, "flex items-center gap-2 mb-2");
+      head.appendChild(el("span", { style: "background:var(" + o.colorVar + ");width:10px;height:10px;border-radius:2px;display:inline-block;" }));
+      const ht = el("span", {}, "text-xs font-semibold"); ht.textContent = o.label;
+      head.appendChild(ht); card.appendChild(head);
+      const rows = [
+        { k: "回収期間", v: pb === null ? "36ヶ月内に未回収" : "約" + pb + "ヶ月" },
+        { k: "一時投資(架空)", v: fmt(o.effectiveCapex) + "万円" },
+        { k: "36ヶ月NPV(架空)", v: (n >= 0 ? "+" : "") + fmt(n) + "万円" },
+      ];
+      rows.forEach(function (r) {
+        const line = el("div", {}, "flex justify-between text-xs py-0.5");
+        const kk = el("span", {}, "muted"); kk.textContent = r.k;
+        const vv = el("span", {}, "tabular font-semibold"); vv.textContent = r.v;
+        line.appendChild(kk); line.appendChild(vv); card.appendChild(line);
+      });
+      statWrap.appendChild(card);
+    });
+
+    // sequencing callout (C → B)
+    const stdC = currentStdC();
+    const bRaw = Object.assign({}, OPTION_DEFS.B, { effectiveCapex: currentCapexB() });
+    const bSeq = effectiveOptions()[1];
+    const callout = document.getElementById("sequencing-callout");
+    callout.innerHTML = "";
+    const pbRaw = paybackMonth(bRaw, baseline), pbSeq = paybackMonth(bSeq, baseline);
+    if (stdC > 0) {
+      callout.innerHTML =
+        '<b>順序効果(C → B):</b> Cで複雑性を約' + Math.round(stdC * 100) + '%削減してからBに着手すると、Bの必要投資は ' +
+        fmt(currentCapexB()) + '万円 → 約<b>' + fmt(bSeq.effectiveCapex) + '万円</b>に圧縮され、回収は約' +
+        (pbRaw || "—") + 'ヶ月 → 約<b>' + (pbSeq || "—") + 'ヶ月</b>に短縮される(架空モデル)。「標準化を先にやると、システム改修はより安く・より速く回収できる」という順序の示唆。';
+    } else {
+      callout.innerHTML = '<b>順序効果(C → B):</b> Cの標準化削減率を上げると、Bの実効投資が圧縮され回収が早まる。スライダーを動かして確認できる(架空モデル)。';
+    }
+    callout.style.color = "var(--text-secondary)";
+  }
+
+  // ============ wire up ============
+  function init() {
+    renderKpiRow();
+    renderSlipMix();
+    renderHistograms();
+    renderTableFilters();
+    renderRateBasis();
+    renderShipperTable();
+    renderShipperBars();
+    render2x2();
+    renderRoadmap();
+    document.getElementById("threshold-slider").addEventListener("input", updateThresholdMetrics);
+    document.getElementById("shipper-count-slider").addEventListener("input", renderCostCurve);
+    document.getElementById("capex-b-slider").addEventListener("input", renderPayback);
+    document.getElementById("std-c-slider").addEventListener("input", renderPayback);
+    document.getElementById("eslip-slider").addEventListener("input", renderPayback);
+    document.getElementById("econs-slider").addEventListener("input", renderPayback);
+    bindTablePagination();
+    updateThresholdMetrics();
+    renderCostCurve();
+    renderPayback();
+    window.addEventListener("resize", function () { renderSlipMix(); });
+  }
+  init();
+})();
+</script>
+</body>
+</html>
