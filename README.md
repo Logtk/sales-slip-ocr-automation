@@ -19,8 +19,8 @@
 
 - **構成**: 単一 `index.html`(Tailwind CDN + Vanilla JS + 標準SVG、外部チャートライブラリ不使用、モックデータ動的生成)
 - **ローカル確認**: `index.html` をブラウザで開くだけ(Tailwind CDNのためネット接続が必要。ビルド不要)
-- **GitHub**: (公開後に追記)
-- **デモ**: (公開後に追記。`main` 直配信・GitHub Actions不要を想定)
+- **GitHub**: https://github.com/Logtk/sales-slip-ocr-automation
+- **デモ**: https://logtk.github.io/sales-slip-ocr-automation/ (`main` 直配信・GitHub Actions不要。pushで数分後に自動反映)
 
 ### 画面
 
