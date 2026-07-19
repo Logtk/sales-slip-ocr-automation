@@ -103,7 +103,7 @@
 
     <div class="mt-5 p-4 rounded-lg" style="border:1px dashed var(--border); background:var(--page-plane);">
       <p class="text-xs font-semibold mb-1" style="color:var(--text-secondary);">📎 ケーススタディ: 荷主1社専任拠点という特殊事例</p>
-      <p class="text-xs secondary leading-relaxed">一部拠点(自部署に相当)は荷主が1社に固定されているため、チャーター・付帯作業ルールを外部マスターとして保持し、クエリ+RPAで基幹システムへ自動反映するというシンプルな運用が成立している。<b>しかしこれは全社では例外的なパターンであり、大半の拠点では複数荷主が並行稼働し、都度の例外対応が積み上がっている。</b> 本質課題は将来の拡張リスクではなく、この特殊事例の外側では全社ですでに起きている問題である。</p>
+      <p class="text-xs secondary leading-relaxed">一部拠点は荷主が1社に固定されているため、チャーター・付帯作業ルールを外部マスターとして保持し、クエリ+RPAで基幹システムへ自動反映するというシンプルな運用が成立している。<b>しかしこれは全社では例外的なパターンであり、大半の拠点では複数荷主が並行稼働し、都度の例外対応が積み上がっている。</b> 本質課題は将来の拡張リスクではなく、この特殊事例の外側では全社ですでに起きている問題である。</p>
     </div>
   </section>
 
@@ -779,7 +779,7 @@
   }
 
   // ============ Section 4 continued: cost curve ============
-  // 荷主間の例外対応が組み合わせ的に積み上がることを表現した多項式(架空)。n=1 が2.3節の特殊事例(自部署相当)に対応
+  // 荷主間の例外対応が組み合わせ的に積み上がることを表現した多項式(架空)。n=1 が2.3節の特殊事例(荷主1社の拠点)に対応
   function hoursWithoutEngine(n) { return 4 * n + 0.15 * n * (n - 1); }
   function hoursWithEngine(n) { return 8 + n; }
   function currentShipperCount() { return parseInt(document.getElementById("shipper-count-slider").value, 10); }
