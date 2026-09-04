@@ -160,7 +160,7 @@
   <!-- Section 4: ルールエンジン -->
   <section class="card p-6">
     <h2 class="text-lg font-semibold mb-1">4. 荷主別カスタム料金ルールエンジン(二層レート) — スケーラビリティの比較</h2>
-    <p class="secondary text-sm mb-4">料金は二層。<b>基本包括</b>(顧客と合意済みの包括運賃・件数の大半)と<b>特別適用</b>(案件ごとの個別見積・少数だが訂正工数が集中)。根本課題は、合意済みの基本包括レートが基幹に無く毎回人手で再現していること。ルールエンジンは Layer1(基本包括マスター)+ Layer2(特別適用オーバーライド)で、大半を自動確定し人手を特別適用に絞る(いずれも架空の合成モデル)。</p>
+    <p class="secondary text-sm mb-4">料金は二層。<b>基本包括</b>(顧客と合意済みの包括運賃・件数の大半)と<b>特別適用</b>(案件ごとの個別見積・少数だが訂正工数が集中)。根本課題は、合意済みの基本包括レートが基幹システムに登録されておらず、毎回人手で再現していること。ルールエンジンは基本包括ルール(自動確定する土台)と特別適用ルール(人手を残す例外)の二層構成で、大半を自動確定し人手を特別適用に絞る(いずれも架空の合成モデル)。</p>
 
     <div class="mb-6">
       <h3 class="text-sm font-semibold mb-2">運賃適用区分の内訳(全国日次1万件のサンプル・架空)</h3>
@@ -207,8 +207,8 @@
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6 text-xs">
       <div class="p-3 rounded-lg" style="border:1px solid var(--border);"><span class="font-semibold" style="color:var(--series-4)">A 入力自動化(OCR+RPA)</span><br><span class="secondary">①データ捕捉を叩く。投資小・回収速・削減浅。②③を放置しスケールに限界。</span></div>
-      <div class="p-3 rounded-lg" style="border:1px solid var(--border);"><span class="font-semibold" style="color:var(--series-1)">B 基幹改修/中間レイヤ(二層レート)</span><br><span class="secondary">③システム制約を叩く。基本包括+特別適用を基幹に持たせ訂正フェーズ自体が消える。前回のルールエンジンはB(ストラングラー型)のサブセット。当初のG(課金モデル転換)はBに吸収。</span></div>
-      <div class="p-3 rounded-lg" style="border:1px solid var(--border);"><span class="font-semibold" style="color:var(--series-8)">C 特別適用の標準化</span><br><span class="secondary">②複雑性の源流を叩く。特別適用(個別見積)を有限メニュー化。BのLayer2の対象範囲を縮小する。</span></div>
+      <div class="p-3 rounded-lg" style="border:1px solid var(--border);"><span class="font-semibold" style="color:var(--series-1)">B 基幹改修/中間レイヤ(二層レート)</span><br><span class="secondary">③システム制約を叩く。基本包括+特別適用を基幹に持たせ、訂正フェーズ自体が消える。前回提案したルールエンジンは、この打ち手の一部を先取りしたもの。</span></div>
+      <div class="p-3 rounded-lg" style="border:1px solid var(--border);"><span class="font-semibold" style="color:var(--series-8)">C 特別適用の標準化</span><br><span class="secondary">②複雑性の源流を叩く。特別適用(個別見積)を有限メニュー化し、Bで人手に残る特別適用の対象範囲そのものを縮小する。</span></div>
     </div>
 
     <div class="flex flex-col md:flex-row gap-3 mb-3">
@@ -258,7 +258,7 @@
       <div id="chart-roadmap" class="overflow-x-auto"></div>
     </div>
 
-    <p class="secondary text-xs mt-4">D(発生源での捕捉)・E(例外処理の集約)は §6 の土台スライダーおよび2×2で扱い、詳細は <a href="docs/strategy_options.md" class="underline">docs/strategy_options.md</a> に記録している。当初のG(課金モデル転換)は「包括運賃は合意・適用済み、ギャップはシステム側」との整理からBに吸収した。</p>
+    <p class="secondary text-xs mt-4">D(発生源での捕捉)・E(例外処理の集約)は §6 の土台スライダーおよび2×2で扱う。検討の詳しい経緯は <a href="docs/strategy_options.md" class="underline">docs/strategy_options.md</a> に記録している。</p>
   </section>
 
 </main>
